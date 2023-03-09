@@ -1,0 +1,94 @@
+name: Run tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+env:
+# replace with the account you want funded on sandbox startup
+  TEST_ADDR: ZWEIC7NT4UYBFYV4TXSDSHBPUNE6QC2RL63QOQGXX6D5C563JBIRNFDHGI
+# replace with the path to your sandbox algoD image
+  ALGOD_IMAGE: "ghcr.io/aurel-fr/dockerize_algorand_sandbox/sandbox_algod:cicd-latest"
+
+jobs:
+  build_and_test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    services:
+      # Important: algod and postgres must be started before the indexer!!
+      algod:
+        # replace with the path to your sandbox algoD image
+        image: "ghcr.io/aurel-fr/dockerize_algorand_sandbox/sandbox_algod:cicd-latest"
+        ports:
+          - 4001:4001
+          - 4002:4002
+          - 9392:9392
+      indexer-db:
+        # replace with the path to your postgres image
+        image: "ghcr.io/aurel-fr/dockerize_algorand_sandbox/postgres:cicd-latest"
+        ports:
+          - 5432:5432 # orig config: 5433:5432, not sure why 5433
+        env:
+          POSTGRES_USER: algorand
+          POSTGRES_PASSWORD: algorand
+          POSTGRES_DB: indexer_db
+        options: >-
+          --health-cmd "pg_isready"
+          --health-interval 5s
+          --health-timeout 15s
+          --health-retries 5
+          --health-start-period 15s
+      indexer:
+        # replace with the path to your sandbox indexer image
+        image: "ghcr.io/aurel-fr/dockerize_algorand_sandbox/sandbox_indexer:cicd-latest"
+        ports:
+          - 8980:8980
+        env:
+          DISABLED: ""
+          PORT: "8980"
+          SNAPSHOT: ""
+          CONNECTION_STRING: "host=indexer-db port=5432 user=algorand password=algorand dbname=indexer_db sslmode=disable"
+          ALGOD_ADDR: algod:4001
+          ALGOD_TOKEN: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          INDEXER_ENABLE_ALL_PARAMETERS: "false"
+        options: >-
+          --health-cmd "wget --spider localhost:8980/health"
+          --health-interval 5s
+          --health-timeout 15s
+          --health-retries 5
+          --health-start-period 15s
+
+    steps:
+      - name: Checkout the repo
+        uses: actions/checkout@v3
+      - name: Set up Node.js 18.x
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18.x
+          cache: "npm"
+      - name: Install dependencies
+        run: |
+          npm pkg delete scripts.prepare # disable husky install
+          npm ci --ignore-scripts
+      - name: fund test wallet
+        run: |
+          # get containerID
+          CONTAINER_ID=$(docker ps --filter ancestor=${{ env.ALGOD_IMAGE }} --format "{{.ID}}")
+          # Log-in algoD to fund our test account
+          docker exec -i $CONTAINER_ID sh << 'EOF'
+          ACCOUNTS_OUTPUT=$(goal account list)
+          echo "$ACCOUNTS_OUTPUT"
+          ACCOUNTS=""
+          for acct in $(echo "$ACCOUNTS_OUTPUT" | cut -f 3 |tr -s " "); do
+              ACCOUNTS="$ACCOUNTS $acct"    
+          done
+          FIRST_ACCOUNT=$(echo "$ACCOUNTS" | cut -d " " -f 2)
+          echo " first account: $FIRST_ACCOUNT"
+          goal clerk send -a 1000000000 -f $FIRST_ACCOUNT -t ${{ env.TEST_ADDR }}
+          EOF
+      - name: Run the tests with mocha
+        run: npm test
