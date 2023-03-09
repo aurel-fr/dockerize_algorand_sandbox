@@ -1,0 +1,52 @@
+name: Dockerize sandbox
+
+# This is a manually triggered workflow
+# In order to publish new docker images of the official Algorand sandbox
+# Go to Actions -> Dockerize sandbox -> run workflow
+on: workflow_dispatch
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build_and_test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - name: lowercase repo name
+        run: echo "IMAGE_PREFIX=${GITHUB_REPOSITORY,,}" >> ${GITHUB_ENV}
+      - name: Checkout the repo
+        uses: actions/checkout@v3
+      - name: Log into registry ${{ env.REGISTRY }}
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Checkout the sandbox repo
+        uses: actions/checkout@v3
+        with:
+          repository: algorand/sandbox
+          path: sandbox
+      - name: Install algorand sandbox
+        run: ./sandbox/sandbox up -v
+      - name: tag images
+        run: |
+          docker images --format '{{.Repository}}:{{.Tag}}' | while read line; do
+            if [[ $line == postgres* || $line == sandbox* ]]; then
+              echo docker tag $line ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/$(echo $line | cut -d':' -f1):cicd-latest;  
+              docker tag $line ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/$(echo $line | cut -d':' -f1):cicd-latest;   
+            fi      
+          done
+      - name: push images
+        run: |
+          docker images --format '{{.Repository}}:{{.Tag}}' | while read image; do
+            if [[ $image == *cicd-latest ]]; then
+              echo "Pushing $image to registry"
+              docker push $image            
+            fi
+          done
