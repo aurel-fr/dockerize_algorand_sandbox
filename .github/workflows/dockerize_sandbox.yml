@@ -32,8 +32,8 @@ jobs:
         with:
           repository: algorand/sandbox
           path: sandbox
-      - name: Install algorand sandbox
-        run: ./sandbox/sandbox up -v
+      - name: Install algorand sandbox, enable devMode      
+        run: ./sandbox/sandbox up dev -v
       - name: tag images
         run: |
           docker images --format '{{.Repository}}:{{.Tag}}' | while read line; do
